@@ -1,0 +1,94 @@
+name: Deploy to Google Cloud Functions with Workload Identity Federation
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  PROJECT_ID: corbacoin
+  REGION: us-central1
+  RUNTIME: go124
+
+jobs:
+  deploy:
+    name: Deploy Cloud Functions
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write  # Required for Workload Identity Federation
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+      
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v3'
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+      
+      - name: Create .env.yaml from secrets
+        run: |
+          cat > .env.yaml << EOF
+          SLACK_BOT_TOKEN: "${{ secrets.SLACK_BOT_TOKEN }}"
+          SLACK_SIGNING_SECRET: "${{ secrets.SLACK_SIGNING_SECRET }}"
+          EOF
+      
+      - name: Deploy SlackCommandGo Function
+        run: |
+          gcloud functions deploy SlackCommandGo \
+            --gen2 \
+            --runtime=${{ env.RUNTIME }} \
+            --region=${{ env.REGION }} \
+            --source=. \
+            --entry-point=SlackCommandGo \
+            --trigger-http \
+            --allow-unauthenticated \
+            --project=${{ env.PROJECT_ID }} \
+            --env-vars-file=.env.yaml
+      
+      - name: Deploy SlackEventsGo Function
+        run: |
+          gcloud functions deploy SlackEventsGo \
+            --gen2 \
+            --runtime=${{ env.RUNTIME }} \
+            --region=${{ env.REGION }} \
+            --source=. \
+            --entry-point=SlackEventsGo \
+            --trigger-http \
+            --allow-unauthenticated \
+            --project=${{ env.PROJECT_ID }} \
+            --env-vars-file=.env.yaml
+      
+      - name: Clean up .env.yaml
+        if: always()
+        run: rm -f .env.yaml
+      
+      - name: Get Function URLs
+        run: |
+          echo "::notice::SlackCommandGo deployed"
+          gcloud functions describe SlackCommandGo \
+            --gen2 \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format='value(serviceConfig.uri)'
+          
+          echo "::notice::SlackEventsGo deployed"
+          gcloud functions describe SlackEventsGo \
+            --gen2 \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format='value(serviceConfig.uri)'
+
