@@ -81,6 +81,84 @@ func SendMessage(channel, text, threadTS string) error {
 	return nil
 }
 
+// GetUserInfo retrieves user information from Slack by user_id
+func GetUserInfo(userID string) (*models.SlackUserInfo, error) {
+	if config.SlackBotToken == "" {
+		return nil, fmt.Errorf("SLACK_BOT_TOKEN is not set")
+	}
+
+	url := fmt.Sprintf("https://slack.com/api/users.info?user=%s", userID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", config.SlackBotToken))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var userInfoResponse models.SlackUserInfoResponse
+	if err := json.NewDecoder(resp.Body).Decode(&userInfoResponse); err != nil {
+		return nil, err
+	}
+
+	if !userInfoResponse.Ok {
+		return nil, fmt.Errorf("slack API error: %s", userInfoResponse.Error)
+	}
+
+	return &userInfoResponse.User, nil
+}
+
+// FindUserByUsername searches for a user in Slack by username and returns their user info
+// This function searches through the workspace users to find a match by name or display name
+func FindUserByUsername(username string) (*models.SlackUserInfo, error) {
+	if config.SlackBotToken == "" {
+		return nil, fmt.Errorf("SLACK_BOT_TOKEN is not set")
+	}
+
+	url := "https://slack.com/api/users.list"
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", config.SlackBotToken))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var usersListResponse models.SlackUsersListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&usersListResponse); err != nil {
+		return nil, err
+	}
+
+	if !usersListResponse.Ok {
+		return nil, fmt.Errorf("slack API error: %s", usersListResponse.Error)
+	}
+
+	// Search for user by username (case-insensitive)
+	for _, user := range usersListResponse.Members {
+		if user.Name == username || user.Profile.DisplayName == username {
+			return &user, nil
+		}
+	}
+
+	return nil, fmt.Errorf("user not found: %s", username)
+}
+
 // VerifySignature verifies that a request came from Slack
 func VerifySignature(r *http.Request, body []byte) bool {
 	timestamp := r.Header.Get("X-Slack-Request-Timestamp")

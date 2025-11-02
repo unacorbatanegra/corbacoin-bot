@@ -2,7 +2,8 @@ package models
 
 // User represents a user in the system with their coin balance
 type User struct {
-	Username string `firestore:"username"`
+	UserID   string `firestore:"user_id"`
+	Username string `firestore:"user_name"`
 	Coins    int    `firestore:"coins"`
 }
 
@@ -50,5 +51,35 @@ type SlackEventInner struct {
 type CommandResult struct {
 	Success bool
 	Message string
+}
+
+// SlackUserInfoResponse represents the response from Slack's users.info API
+type SlackUserInfoResponse struct {
+	Ok    bool           `json:"ok"`
+	User  SlackUserInfo  `json:"user"`
+	Error string         `json:"error,omitempty"`
+}
+
+// SlackUserInfo represents user information from Slack
+type SlackUserInfo struct {
+	ID       string            `json:"id"`
+	Name     string            `json:"name"`
+	RealName string            `json:"real_name"`
+	Profile  SlackUserProfile  `json:"profile"`
+}
+
+// SlackUserProfile represents the profile section of a Slack user
+type SlackUserProfile struct {
+	DisplayName string `json:"display_name"`
+	RealName    string `json:"real_name"`
+	Email       string `json:"email"`
+	Image192    string `json:"image_192"`
+}
+
+// SlackUsersListResponse represents the response from Slack's users.list API
+type SlackUsersListResponse struct {
+	Ok      bool            `json:"ok"`
+	Members []SlackUserInfo `json:"members"`
+	Error   string          `json:"error,omitempty"`
 }
 

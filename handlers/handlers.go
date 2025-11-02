@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -25,6 +26,8 @@ func SlackCommand(c *gin.Context) {
 		return
 	}
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+
+	log.Println("SlackCommand body: " + string(body))
 
 	// Verify Slack signature
 	if !slack.VerifySignature(c.Request, body) {
@@ -68,31 +71,39 @@ func SlackCommand(c *gin.Context) {
 
 		switch command {
 		case "/balance":
-			message, err := commands.HandleBalance(ctx, userName, userID)
+			message, err := commands.HandleBalance(ctx, userID, userName)
 			if err != nil {
-				slack.SendErrorResponse(responseURL, "An error occurred. Please try again later.", userName)
+				slack.SendErrorResponse(responseURL, "An error occurred. Please try again later.", userID)
 				return
 			}
 			slack.SendResponse(responseURL, message, "in_channel")
 
 		case "/send":
-			recipientName, amount, ok := commands.ParseSendCommand(text)
+			log.Println("Send command received: " + text)
+			recipientIdentifier, amount, ok := commands.ParseSendCommand(text)
 			if !ok {
-				slack.SendErrorResponse(responseURL, "Usage: `/send @user amount`", userName)
+				slack.SendErrorResponse(responseURL, "Usage: `/send @user amount`", userID)
 				return
 			}
 
-			result := commands.HandleSend(ctx, userName, recipientName, amount)
+			// Get recipient user info from Slack (works with both user_id and username)
+			recipientInfo, err := slack.GetOrFindUser(recipientIdentifier)
+			if err != nil {
+				slack.SendErrorResponse(responseURL, fmt.Sprintf("Could not find user '%s'. %v", recipientIdentifier, err), userID)
+				return
+			}
+
+			result := commands.HandleSend(ctx, userID, userName, recipientInfo.ID, recipientInfo.Name, amount)
 			if result.Success {
 				slack.SendResponse(responseURL, result.Message, "in_channel")
 			} else {
-				slack.SendErrorResponse(responseURL, result.Message, userName)
+				slack.SendErrorResponse(responseURL, result.Message, userID)
 			}
 
 		case "/leaderboard":
 			message, err := commands.HandleLeaderboard(ctx)
 			if err != nil {
-				slack.SendErrorResponse(responseURL, "An error occurred. Please try again later.", userName)
+				slack.SendErrorResponse(responseURL, "An error occurred. Please try again later.", userID)
 				return
 			}
 			slack.SendResponse(responseURL, message, "in_channel")
@@ -111,6 +122,7 @@ func SlackEvents(c *gin.Context) {
 	}
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
 
+	log.Println("SlackEvents body: " + string(body))
 	// Verify Slack signature
 	if !slack.VerifySignature(c.Request, body) {
 		log.Println("Unauthorized: signature verification failed")
@@ -154,17 +166,23 @@ func SlackEvents(c *gin.Context) {
 			}
 			userName := event.User
 
-			// Remove bot mention and parse command
-			re := regexp.MustCompile(`<@[A-Z0-9]+>`)
-			text := strings.TrimSpace(re.ReplaceAllString(event.Text, ""))
-			parts := strings.Fields(strings.ToLower(text))
-
+			// Remove ONLY the first bot mention (not all mentions, as we need recipient mentions)
+			re := regexp.MustCompile(`<@[A-Z0-9]+>\s*`)
+			loc := re.FindStringIndex(event.Text)
+			text := event.Text
+			if loc != nil {
+				// Remove only the first mention
+				text = strings.TrimSpace(event.Text[:loc[0]] + event.Text[loc[1]:])
+			}
+			
+			// For getting the command, we can lowercase the first word
+			parts := strings.Fields(text)
 			if len(parts) == 0 {
 				return
 			}
 
-			command := parts[0]
-			log.Printf("App mention received: command=%s, user=%s, channel=%s", command, userName, channel)
+			command := strings.ToLower(parts[0])
+			log.Printf("App mention received: command=%s, user=%s, channel=%s, fullText=%s", command, userName, channel, text)
 
 			switch command {
 			case "balance":
@@ -176,14 +194,30 @@ func SlackEvents(c *gin.Context) {
 				slack.SendMessage(channel, message, threadTS)
 
 			case "send":
-				sendText := strings.TrimPrefix(text, "send ")
-				recipientName, amount, ok := commands.ParseSendCommand(sendText)
+				// Extract everything after the "send" command
+				sendText := ""
+				if len(parts) > 1 {
+					// Find where "send" ends in the original text and take the rest
+					idx := strings.Index(strings.ToLower(text), "send")
+					if idx >= 0 {
+						sendText = strings.TrimSpace(text[idx+4:]) // 4 is length of "send"
+					}
+				}
+				
+				recipientIdentifier, amount, ok := commands.ParseSendCommand(sendText)
 				if !ok {
 					slack.SendMessage(channel, "Usage: `@CorbacoinBot send @user amount`", threadTS)
 					return
 				}
 
-				result := commands.HandleSend(ctx, userName, recipientName, amount)
+				// Get recipient user info from Slack (works with both user_id and username)
+				recipientInfo, err := slack.GetOrFindUser(recipientIdentifier)
+				if err != nil {
+					slack.SendMessage(channel, fmt.Sprintf("Could not find user '%s'. %v", recipientIdentifier, err), threadTS)
+					return
+				}
+
+				result := commands.HandleSend(ctx, userName, userName, recipientInfo.ID, recipientInfo.Name, amount)
 				slack.SendMessage(channel, result.Message, threadTS)
 
 			case "leaderboard":

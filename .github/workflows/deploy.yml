@@ -44,6 +44,7 @@ jobs:
           cat > .env.yaml << EOF
           SLACK_BOT_TOKEN: "${{ secrets.SLACK_BOT_TOKEN }}"
           SLACK_SIGNING_SECRET: "${{ secrets.SLACK_SIGNING_SECRET }}"
+          GCP_PROJECT: "${{ env.PROJECT_ID }}"
           EOF
       
       - name: Deploy SlackCommandGo Function

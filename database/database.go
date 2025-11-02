@@ -7,6 +7,7 @@ import (
 	"cloud.google.com/go/firestore"
 	"github.com/unacorbatanegra/corbacoin-bot/config"
 	"github.com/unacorbatanegra/corbacoin-bot/models"
+	"github.com/unacorbatanegra/corbacoin-bot/slack"
 	"google.golang.org/api/iterator"
 )
 
@@ -16,50 +17,71 @@ var (
 )
 
 // GetUser retrieves a user from the database, creating a new one if it doesn't exist
-func GetUser(ctx context.Context, username string) (*models.User, error) {
-	userRef := Client.Collection("users").Doc(username)
+func GetUser(ctx context.Context, userID, username string) (*models.User, error) {
+	userRef := Client.Collection("users").Doc(userID)
 	doc, err := userRef.Get(ctx)
 
 	if err != nil {
-		// User doesn't exist, create new user
+		// User doesn't exist in database, fetch info from Slack
+		actualUsername := username
+		if actualUsername == "" {
+			// If username is not provided, fetch it from Slack
+			userInfo, slackErr := slack.GetUserInfo(userID)
+			if slackErr != nil {
+				log.Printf("Error fetching user info from Slack for %s: %v", userID, slackErr)
+				// Fallback to userID as username if Slack fetch fails
+				actualUsername = userID
+			} else {
+				actualUsername = userInfo.Name
+			}
+		}
+
+		// Create new user
 		user := &models.User{
-			Username: username,
+			UserID:   userID,
+			Username: actualUsername,
 			Coins:    config.InitialCoins,
 		}
 		_, err = userRef.Set(ctx, user)
 		if err != nil {
-			log.Printf("Error creating user %s: %v", username, err)
+			log.Printf("Error creating user %s (%s): %v", actualUsername, userID, err)
 			return user, nil
 		}
-		log.Printf("User created: %s", username)
+		log.Printf("User created: %s (%s)", actualUsername, userID)
 		return user, nil
 	}
 
 	var user models.User
 	if err := doc.DataTo(&user); err != nil {
-		log.Printf("Error parsing user data for %s: %v", username, err)
-		return &models.User{Username: username, Coins: config.InitialCoins}, nil
+		log.Printf("Error parsing user data for %s (%s): %v", username, userID, err)
+		return &models.User{UserID: userID, Username: username, Coins: config.InitialCoins}, nil
 	}
 
 	return &user, nil
 }
 
 // UpdateCoins updates a user's coin balance by adding the specified amount
-func UpdateCoins(ctx context.Context, username string, amount int) (int, error) {
-	user, err := GetUser(ctx, username)
+func UpdateCoins(ctx context.Context, userID string, amount int) (int, error) {
+	userRef := Client.Collection("users").Doc(userID)
+	doc, err := userRef.Get(ctx)
 	if err != nil {
+		log.Printf("Error getting user %s: %v", userID, err)
+		return 0, err
+	}
+
+	var user models.User
+	if err := doc.DataTo(&user); err != nil {
+		log.Printf("Error parsing user data for %s: %v", userID, err)
 		return 0, err
 	}
 
 	newAmount := user.Coins + amount
-	userRef := Client.Collection("users").Doc(username)
-
 	_, err = userRef.Update(ctx, []firestore.Update{
 		{Path: "coins", Value: newAmount},
 	})
 
 	if err != nil {
-		log.Printf("Error updating coins for %s: %v", username, err)
+		log.Printf("Error updating coins for %s: %v", userID, err)
 		return 0, err
 	}
 
